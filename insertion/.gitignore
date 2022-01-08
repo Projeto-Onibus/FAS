@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Configs file
+*.conf
+
 # C extensions
 *.so
 
@@ -127,7 +130,3 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-
-
-# Not yet verified modules
-visualization
