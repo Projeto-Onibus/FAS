@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 import cupy as cp
 
-from LineDetection import HaversineLocal
+from .LineDetection import HaversineLocal
 
 def CorrectData(detectionTable, busMatrix, linesMatrix, busList, lineList, CONFIGS):
 	"""
@@ -43,11 +43,13 @@ def CorrectData(detectionTable, busMatrix, linesMatrix, busList, lineList, CONFI
 	"""
 
 	# List of all lines detected for each bus. Series of tuples (<line>, <direction>, <onibus>)
+	#print(detectionTable)
 	detections = detectionTable[detectionTable == True].stack()
 	buses_detected = detections.index.get_level_values(2).unique()
 	lines_detected = list(set(map(lambda x: (x[0], x[1]), detections.index)))
-	busList = list(map(lambda x: x[0], busList))
+	busList = list(busList)
 	lineList = list(map(lambda x: (x[0]), lineList))
+    
 
 	correctedData = []
 	for bus in buses_detected:
@@ -59,7 +61,7 @@ def CorrectData(detectionTable, busMatrix, linesMatrix, busList, lineList, CONFI
 		for line in lines:
 			lineMap = np.array(linesMatrix[lineList.index(line)])
 			lineMap = lineMap[~np.any(np.isnan(lineMap), axis=1)]
-			distanceMatrix = 1 / (1 + np.exp(-int(CONFIGS["default_correction_method"]["distanceTolerance"]) 
+			distanceMatrix = 1 / (1 + np.exp(-int(CONFIGS["default_correction_method"]["tolerance"]) 
 										- cp.asnumpy(HaversineLocal(cp.asarray(np.expand_dims(busMap,0)), cp.asarray(np.expand_dims(lineMap,0)))[0])))
 			distanceMatrix = np.squeeze(distanceMatrix)
 			belongingArray = np.round(np.amax(distanceMatrix, axis=1))
