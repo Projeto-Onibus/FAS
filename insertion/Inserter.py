@@ -8,10 +8,7 @@ import argparse
 from configparser import ConfigParser
 from datetime import datetime, timedelta
 
-
-
 import requests
-import schedule
 import psycopg2 as db
 
 # Regular expression to filter only valid data
@@ -209,13 +206,11 @@ if __name__ == "__main__":
         CollectBusData(database,logger)
         exit(0)
     
-    schedule.every().minute.do(CollectBusData,database,logger)
     
     while True:
         try:
-            schedule.run_pending()
+            CollectBusData(database,logger)
         except Exception as err:
             logger.error(f"Failed to collect data - {err}")
-           
-        time.sleep(2)
+        time.sleep(60)
 
