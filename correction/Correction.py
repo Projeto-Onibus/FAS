@@ -10,7 +10,9 @@ from tracktable.applications.trajectory_splitter import split_when_idle
 
 from .data_processing.FAS import LineCorrection, LineDetection
 from .data_processing.LCSS import LCSS
+from .data_processing.DTW import DTW
 from .data_processing.utils import TracktableSplittedPropertyClassification 
+
 def PadArray(array, maxSize):
     return np.pad(array,((0,maxSize - array.shape[0]),(0,0)),constant_values=np.NaN)
 
@@ -23,7 +25,8 @@ class Corrector:
     def __init__(self):
         self.__algorithms = {
                 'FAS':self.FASAlgorithm,
-                'LCSS':self.LCSSAlgorithm
+                'LCSS':self.LCSSAlgorithm,
+                'DTW':self.DTWAlgorithm
             }
         self.__parameters = {
                 'FAS': {
@@ -108,7 +111,28 @@ class Corrector:
         
         return True
 
-    def FASAlgorithm(self,detect=False,detectionPercentage=False,divisions=6):
+    def DTWAlgorithm(self):
+        detectionTable = pd.DataFrame(False,index=np.array(self.__lineList).T.tolist(),columns=self.__busList).astype('bool')
+
+        progressoTotal = len(self.__busMatrix)
+        progresso = 0
+        
+        #self.__busData['separated_trajectories'] = self.__busData['trajectory'].apply(tracktable.applications.trajectory_splitter.split_when_idle,self.__parameters['trajectory_splitter']['time']*60,self.__parameters,self.__parameters['trajectory_splitter']['distance'])
+        for indexBus, bus in self.__busData.iterrows():
+            progresso += 1
+            separatedTrajectories = split_when_idle(bus['trajectory'],self.__parameters['trajectory_splitter']['time']*60,self.__parameters['trajectory_splitter']['distance']/1000,5)
+            for trajectoryIndex, trajectory in enumerate(separatedTrajectories):
+                with multiprocessing.Pool(5) as p:
+                    lineResults = p.starmap(DTW,[(np.asarray(trajectory),i) for i in self.__lineMatrix])
+                resultedLineIndex = pd.Series(lineResults)
+                resultedLineIndex = resultedLineIndex.idxmin()
+                trajectory.set_property('DTW_detection',str(self.__lineList[resultedLineIndex]))
+
+            TracktableSplittedPropertyClassification(bus['trajectory'],separatedTrajectories,'DTW_detection')
+        
+        return True
+
+    def FASAlgorithm(self,detect=False,detectionPercentage=False,divisions=3):
         self.AnalyseData()
         busGpu = cp.asarray(self.__busMatrix[:,:,[1,0]]) 
         linesGpu = cp.asarray(self.__lineMatrix[:,:,[1,0]])
@@ -129,7 +153,11 @@ class Corrector:
                         columns = pd.Index(data=self.__busList[busSegment:busSegment+divisions],name = 'buses')
                      )
                 detectionTable.iloc[lineSegment:lineSegment+divisions,busSegment:busSegment+divisions] = detectionTableAppend
+
         
+        del busGpu
+        del linesGpu
+
         # Returns detection percentage
         if detect and detectionPercentage:
             return detectionTable
@@ -139,7 +167,6 @@ class Corrector:
             detectionTable = detectionTable > self.__parameters['FAS']['detectionPercentage']
         elif self.__parameters['FAS']['detectionMethod'] == "HighestThree":
             for columnName in detectionTable.columns:
-                print(detectionTable[columnName].sort_values(ascending=False).iloc[:3])
                 detectionTable[columnName] = detectionTable[columnName].isin(detectionTable[columnName].sort_values(ascending=False).iloc[:3])
 
         # Returns boolean detection table
@@ -161,15 +188,21 @@ class Corrector:
         )
 #        results.columns = results.columns.to_list().sort()
         reindexedBusData = self.__busData.reorder_levels(['bus_id','time_detection'])
-        for index, bus in results.T.iterrows():
-            try:
-                curBusTrajectory = reindexedBusData.loc[index]['trajectory'].iloc[0]
-                for i in range(len(curBusTrajectory)):
-                    curBusTrajectory[i].set_property("FAS_detection",results[index][i])
-            except KeyError:
-                for i in range(len(curBusTrajectory)):
-                    curBusTrajectory[i].set_property("FAS_detection","")
 
+        for index, bus in results.T.iterrows():
+            
+            curBusTrajectory = reindexedBusData.loc[index]['trajectory'].iloc[0]
+
+            # Mask out when the bus was still 
+
+            for i in range(len(curBusTrajectory)):
+                if i == results.T.shape[1]: # NAO DEVERIA, TABELA DE RESULTADOS APRESENTA TAMANHO MENOR QUE A TRAJETORIA
+                    break
+                if results[index][i] is None:
+                    curBusTrajectory[i].set_property("FAS_detection","")
+                else:
+                    curBusTrajectory[i].set_property("FAS_detection",results[index][i])
+        
         return results
     
     def Correct(self, busData=None, lineData=None):

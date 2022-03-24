@@ -42,76 +42,98 @@ def CorrectData(detectionTable, busMatrix, linesMatrix, busList, lineList, CONFI
 		CONFIGS['line_correction']['limit'] - The minimun value to consider a set of points as a valid group
 	"""
 
+    
 	# List of all lines detected for each bus. Series of tuples (<line>, <direction>, <onibus>)
-	#print(detectionTable)
 	detections = detectionTable[detectionTable == True].stack()
-	buses_detected = detections.index.get_level_values(2).unique()
-	lines_detected = list(set(map(lambda x: (x[0], x[1]), detections.index)))
-	busList = list(busList)
+	buses_detected = detections.index.get_level_values(2).unique() # Ids in wich a detection was made
+	lines_detected = list(set(map(lambda x: (x[0], x[1]), detections.index))) # Lines that were detected
+	busList = list(busList) 
 	lineList = list(map(lambda x: (x[0]), lineList))
     
 
 	correctedData = []
+
+    # iteraing over each bus that has at least one detection
 	for bus in buses_detected:
+        # Selects the buses' coordinates
 		busMap = np.array(busMatrix[busList.index(bus)])
-		busMap = busMap[~np.any(np.isnan(busMap), axis=1)]					# Removendo valores NaN no fim do tensor
+		busMap = busMap[~np.any(np.isnan(busMap), axis=1)]
+		
+        # Select line
 		lines = [i[0] for i in detectionTable[bus].loc[detectionTable[bus] == True].index.unique()]
 		linesToCompare = []
 
+        # Iterate over each line that was detected for this bus
+        # Calculates a vector containing the detections along the bus coordinates
 		for line in lines:
 			lineMap = np.array(linesMatrix[lineList.index(line)])
 			lineMap = lineMap[~np.any(np.isnan(lineMap), axis=1)]
-			distanceMatrix = 1 / (1 + np.exp(-int(CONFIGS["default_correction_method"]["tolerance"]) 
-										- cp.asnumpy(HaversineLocal(cp.asarray(np.expand_dims(busMap,0)), cp.asarray(np.expand_dims(lineMap,0)))[0])))
+			distanceMatrix = cp.asnumpy(HaversineLocal(cp.asarray(np.expand_dims(busMap,0)), cp.asarray(np.expand_dims(lineMap,0)))[0]) < CONFIGS['default_correction_method']['tolerance']
 			distanceMatrix = np.squeeze(distanceMatrix)
 			belongingArray = np.round(np.amax(distanceMatrix, axis=1))
 			belongingArray = CorrectLine(belongingArray, CONFIGS['default_correction_method']['limit'])
 			linesToCompare += [belongingArray]
+
+        # Stacks all detections per line and creates a belonging matrix
+		# For each bus, one coordinate selects line and the other a bus coordinate
+		# The value is a boolean indicating if the line was reached in that coordinate
 		belongingMatrix = np.stack(linesToCompare)
-		# Os pontos em que devemos nos preocupar são aqueles em que há sobreposição nas linhas, e reconhecendo estes pontos
-		# podemos determinar o tamanho do grupo que estes pontos pertencem e usar este critério como abordagem para resolver o conflito
+		# Sums over line dimension, if value is greater than 2, a conflict has ocurred
+		# Conflict marks the index where this occurs
 		conflicts1 = np.sum(belongingMatrix,axis=0)
 		conflicts2 = np.nonzero(conflicts1 > 1)
-		conflicts  = np.stack(conflicts2)
+		conflicts  = conflicts2[0] # removes tuple
 		#conflicts = np.stack(np.nonzero(np.sum(belongingMatrix,axis=0) > 1))
 
+		# If there was conflict
 		if len(conflicts) != 0:
+
 			# Matriz_prioridade consiste em uma matriz de M linhas onde M é o número de linhas de ônibus e N colunas onde N
 			# é o número de pontos onde ocorreu conflito
 			# A matriz_prioridade é preenchida com o número de pontos no grupo em que o conflito em um determinado ponto para
 			# uma determinada linha foi detectado
 			priorityMatrix = np.zeros((belongingMatrix.shape[0], conflicts.shape[0]))
+			
+			# Count the size of each continuos group for each line in the detectionMatrix
+			# Each group is represented in the priorityMatrix by its group size
 			for line in range(len(belongingMatrix)):
 				#ocurrences, counters = torch.unique_consecutive(belongingMatrix[line], return_counts=True)
 				ocurrences = belongingMatrix[line][np.insert(np.absolute(np.diff(belongingMatrix[line])) > 0.00001, 0, True)]
 				counters = np.diff(np.concatenate(([True],np.absolute(np.diff(belongingMatrix[line])) > 0,[True])).nonzero()[0])
 				auxiliarCounters = np.cumsum(counters, 0)
 				for conflict in range(conflicts.shape[0]):
-					if len(conflicts[conflict]) == 0:
-						priorityMatrix[line][conflict] = 0
-						break
+#					if len(conflicts[conflict]) == 0:
+#						priorityMatrix[line][conflict] = 0
+#						break
 					contagemConflitos = np.where(auxiliarCounters > conflicts[conflict])[0]
 					if len(contagemConflitos) == 0:
 						priorityMatrix[line][conflict] = 0
 						break
 					grupo = contagemConflitos[0]
-					priorityMatrix[line][conflict] = counters[grupo] if ocurrences[grupo] == 1 else 0
-			
-			# As linhas cujo grupo que engloba o ponto de conflito é maior é selecionada para ser feita a substituição
-			#_, dominantLines = priorityMatrix.max(0)
-			dominantLines = priorityMatrix.max(0)
 
-			dominantLines = dominantLines if (dominantLines.shape != tuple() and dominantLines.shape != (1,)) else dominantLines
-			# Por fim a matriz de pertencimento é atualizada eliminando os conflitos
-			for line in range(len(belongingMatrix)):
-				for conflict in range(conflicts.shape[0]):
-					if line != dominantLines[conflict]:
-						belongingMatrix[line][conflicts[conflict]] = 0
+					# Is a matrix similar to belongingMatrix, but each continuos sets of 1 are replaced in the same indexes by this total group size
+					priorityMatrix[line][conflict] = counters[grupo] if ocurrences[grupo] == 1 else 0
+
+			
+			# Calculates the 
+			dominantLines = priorityMatrix.max(0)
+			belongingMatrix = priorityMatrix.argmax(0)
+	#		dominantLines = dominantLines if (dominantLines.shape != tuple() and dominantLines.shape != (1,)) else dominantLines
+	#		# Por fim a matriz de pertencimento é atualizada eliminando os conflitos
+	#		for line in range(len(belongingMatrix)):
+	#			for conflict in range(conflicts.shape[0]):
+	#				if line != dominantLines[conflict]:
+	#					belongingMatrix[line][conflicts[conflict]] = 0
+		else:
+			belongingMatrix = priorityMatrix.argmax(0)
+
 			# Para evitar flutuações que possam surgir nesse processo os arrays de pertencimento de linha
 			# passam novamente pela função CorrectLine()
-			for line in range(len(belongingMatrix)):
-				belongingMatrix[line] = CorrectLine(belongingMatrix[line], CONFIGS['default_correction_method']['limit'])
-		correctedData += [[lines[i] for i in np.where(belongingMatrix == belongingMatrix.max(0))[0]]]
+#			for line in range(len(belongingMatrix)):
+#				belongingMatrix[line] = CorrectLine(belongingMatrix[line], CONFIGS['default_correction_method']['limit'])
+#		correctedData += [[lines[i] for i in np.where(belongingMatrix == belongingMatrix.max(0))[0]]]
+		correctedData += [[lines[i] for i in belongingMatrix]]
+#
 	# Criação de dataframe pandas. matriz de m linhas representando os ônibus e n colunas representando os pontos de ônibus.
 	correctedDataframe = pd.DataFrame(correctedData, index=buses_detected)
 

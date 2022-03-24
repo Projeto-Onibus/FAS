@@ -130,7 +130,7 @@ def Algorithm(MO,ML,TOLERANCE,detectionPercentage=None,haversine=True):
 
     MatrizLinhas = cp.dsplit(MatrizLinhas,2)
     MatrizOnibus = cp.dsplit(MatrizOnibus,2)
-
+    
     infVector = cp.squeeze(cp.sum(cp.isnan(MatrizLinhas[0]),axis=1),axis=-1)
 
     MatrizLinhas[0] = cp.expand_dims(MatrizLinhas[0],axis=-1)
@@ -152,15 +152,19 @@ def Algorithm(MO,ML,TOLERANCE,detectionPercentage=None,haversine=True):
         ))
     else:
         results = cp.sqrt((MatrizOnibus[0]-MatrizLinhas[0])**2+(MatrizOnibus[1]-MatrizLinhas[1])**2)
-        
+
     # Matriz D^[min]
     resultsMin = cp.nanmin(results,axis=1)
+    del results
     #resultsGroup = cp.pad(resultsMin,[(0,0),(0,0),(0,resultsMin.shape[2]%groupSize)],constant_values=cp.NaN)
     #resultsGroup = cp.reshape(resultsGroup,(resultsGroup.shape[0],resultsGroup.shape[1],-1,groupSize))
     sizeLine = resultsMin.shape[2]
     #below = cp.sum(resultsMin,axis=2)
     below = cp.sum(resultsMin<TOLERANCE,axis=2)
     resultsPerc = below / (sizeLine - infVector)
+    del resultsMin
+    del MatrizLinhas
+    del MatrizOnibus
     if detectionPercentage:
         return resultsPerc > cp.array(detectionPercentage)
     return resultsPerc
